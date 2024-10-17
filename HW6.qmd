@@ -1,0 +1,189 @@
+---
+title: "HW6"
+format: html
+editor: visual
+---
+
+```{r}
+library(purrr)
+library(httr)
+library(jsonlite)
+library(dplyr)
+library(lubridate)
+```
+
+
+## Task 1
+
+1.  What is the purpose of the lapply() function? What is the equivalent purrr function?
+
+> lapply takes a function and applies it to every element in a list. purrr has map to do the same thing.
+
+2.  Suppose we have a list called my_list. Each element of the list is a numeric data frame (all columns are numeric). We want use lapply() to run the code cor(numeric_matrix, method = "kendall") on each element of the list. Write code to do this below! (I’m really trying to ask you how you specify method = "kendall" when calling lapply())
+
+> lapply(my_list, cor, method = "kendall")
+
+3.  What are two advantages of using purrr functions instead of the BaseR apply family?
+
+> purrr maintains consistency with the ordering and purpose of its arguments and has type stability
+
+4.  What is a side-effect function?
+
+> It is a function that does something, but in the context of a functional-style programming chain, it doesn't modify the value that is being passed from function to function.
+
+5.  Why can you name a variable sd in a function and not cause any issues with the sd function?
+
+> This is due to R's scoping method where a variable is first searched for in the function environment before progressing outside to the global environment and beyond.
+
+## Task 2
+
+first write RMSE function
+
+```{r}
+getRMSE <- function(responses, predictions, ...){
+  squared_diffs <- (responses - predictions) ^ 2
+  return(sqrt(mean(squared_diffs, ...)))
+}
+```
+
+now we'll create some test data for the function
+
+```{r}
+set.seed(10)
+n <- 100
+x <- runif(n)
+resp <- 3 + 10 * x + rnorm(n)
+pred <- predict(lm(resp ~ x), data.frame(x))
+```
+
+and we'll test it several ways
+
+```{r}
+getRMSE(resp, pred)
+
+resp[c(4, 82)] <- NA_real_
+
+getRMSE(resp, pred)
+getRMSE(resp, pred, na.rm = TRUE)
+```
+
+we repeat the process for MAE
+
+```{r}
+getMAE = function(responses, predictions, ...){
+  absolute_diffs <- abs(responses - predictions)
+  return(sqrt(mean(absolute_diffs, ...)))
+}
+
+set.seed(10)
+n <- 100
+x <- runif(n)
+resp <- 3 + 10 * x + rnorm(n)
+pred <- predict(lm(resp ~ x), data.frame(x))
+
+getMAE(resp, pred)
+
+resp[c(13, 54)] <- NA_real_
+
+getMAE(resp, pred)
+getMAE(resp, pred, na.rm = TRUE)
+```
+
+now we combine into a wrapper function
+
+```{r}
+getPredictionMetrics <- function(responses, predictions, modes = c("RMSE", "MAE"), ...){
+  
+  if(!is.atomic(responses) || !is.numeric(responses) || !is.atomic(predictions) || !is.numeric(predictions)){
+    stop("Either responses or predictions are not an atomic numeric vector")
+  }
+  
+  results <- map(modes, function(mode){
+    metric_function <- get(paste(c("get", mode), collapse = ""))
+    return(metric_function(responses, predictions, ...))
+  })
+  
+  names(results) <- modes
+  
+  return(results)
+}
+```
+
+now we test as requested
+
+```{r}
+set.seed(10)
+n <- 100
+x <- runif(n)
+resp <- 3 + 10 * x + rnorm(n)
+pred <- predict(lm(resp ~ x), data.frame(x))
+
+getPredictionMetrics(resp, pred)
+getPredictionMetrics(resp, pred, modes = c("MAE"))
+getPredictionMetrics(resp, pred, modes = c("RMSE"))
+
+resp[c(34, 67)] <- NA_real_
+
+getPredictionMetrics(resp, pred)
+getPredictionMetrics(resp, pred, na.rm = TRUE)
+#had to comment out this line because the error was effective
+#getPredictionMetrics(resp, c("Hello", "this", "is", "invalid", "data"))
+```
+
+## Task 3
+
+first get and unpack API response
+
+```{r}
+full_resp <- GET("https://newsapi.org/v2/everything", query = list(q = "click to cancel", apiKey = "675b998446044db1b34cd9f57dcfa261"))
+
+news_results <- full_resp$content |> 
+  rawToChar() |> 
+  fromJSON() |> 
+  as_tibble() |> 
+  pluck("articles")
+```
+
+now we package it as a function
+
+```{r}
+get_news_data <- function(search_terms, date_from, key){
+  full_resp <- GET("https://newsapi.org/v2/everything", query = list(q = search_terms, from = date_from, apiKey = key))
+
+return(full_resp$content |> 
+  rawToChar() |> 
+  fromJSON() |>  
+  pluck("articles") |> 
+  as_tibble())
+}
+```
+
+last, we process
+
+```{r}
+ohtani_tbl <- get_news_data("Shohei Ohtani", date_from = "2024-10-01", key = "675b998446044db1b34cd9f57dcfa261")
+
+judge_tbl <- get_news_data("Aaron Judge", date_from = "2024-10-01", key = "675b998446044db1b34cd9f57dcfa261")
+
+ohtani_tbl |> 
+  pluck("source", "name") |> 
+  table()
+
+judge_tbl |> 
+  pluck("source", "name") |> 
+  table()
+
+ohtani_tbl <- ohtani_tbl |> 
+  mutate(publishedAt = ymd_hms(publishedAt)) |> 
+  arrange(publishedAt) |> 
+  mutate(pub_diff = publishedAt - lag(publishedAt))
+
+judge_tbl <- judge_tbl |> 
+  mutate(publishedAt = ymd_hms(publishedAt)) |> 
+  arrange(publishedAt) |> 
+  mutate(pub_diff = publishedAt - lag(publishedAt))
+
+ohtani_tbl |> 
+  select(publishedAt, pub_diff) |> 
+  map(\(x) list(mean = mean(x, na.rm = TRUE), sd = sd(x, na.rm = TRUE), median = median(x, na.rm = TRUE)))
+```
